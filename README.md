@@ -146,6 +146,8 @@ as keyword arguments to several ``dill`` functions:
 * with *recurse=True*, objects referred to in the global dictionary are
   recursively traced and pickled, instead of the default behavior of
   attempting to store the entire global dictionary.
+* with *relative=True*, pickled code objects (e.g. lambdas) save the relative
+  source code filepath instead of the absolute source code filepath.
 * with *fmode*, the contents of the file can be pickled along with the file
   handle, which is useful if the object is being sent over the wire to a
   remote system which does not have the original file on disk. Options are

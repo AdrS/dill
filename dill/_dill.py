@@ -247,7 +247,7 @@ def copy(obj, *args, **kwds):
     ignore = kwds.pop('ignore', Unpickler.settings['ignore'])
     return loads(dumps(obj, *args, **kwds), ignore=ignore)
 
-def dump(obj, file, protocol=None, byref=None, fmode=None, recurse=None, **kwds):#, strictio=None):
+def dump(obj, file, protocol=None, byref=None, fmode=None, recurse=None, relative=None, **kwds):#, strictio=None):
     """
     Pickle an object to a file.
 
@@ -256,11 +256,11 @@ def dump(obj, file, protocol=None, byref=None, fmode=None, recurse=None, **kwds)
     from .settings import settings
     protocol = settings['protocol'] if protocol is None else int(protocol)
     _kwds = kwds.copy()
-    _kwds.update(dict(byref=byref, fmode=fmode, recurse=recurse))
+    _kwds.update(dict(byref=byref, fmode=fmode, recurse=recurse, relative=relative))
     Pickler(file, protocol, **_kwds).dump(obj)
     return
 
-def dumps(obj, protocol=None, byref=None, fmode=None, recurse=None, **kwds):#, strictio=None):
+def dumps(obj, protocol=None, byref=None, fmode=None, recurse=None, relative=None, **kwds):#, strictio=None):
     """
     Pickle an object to a string.
 
@@ -275,6 +275,11 @@ def dumps(obj, protocol=None, byref=None, fmode=None, recurse=None, **kwds):#, s
     of attempting to store the entire global dictionary. This is needed for
     functions defined via *exec()*.
 
+    If *relative=True*, then pickled code objects (e.g. labmdas) use the
+    relative source code filepath for the co_filename attribute instead of the
+    absolute source code filepath. The path is relative to the first
+    directory in sys.path containing the source code path.
+
     *fmode* (:const:`HANDLE_FMODE`, :const:`CONTENTS_FMODE`,
     or :const:`FILE_FMODE`) indicates how file handles will be pickled.
     For example, when pickling a data file handle for transfer to a remote
@@ -285,7 +290,7 @@ def dumps(obj, protocol=None, byref=None, fmode=None, recurse=None, **kwds):#, s
     Default values for keyword arguments can be set in :mod:`dill.settings`.
     """
     file = StringIO()
-    dump(obj, file, protocol, byref, fmode, recurse, **kwds)#, strictio)
+    dump(obj, file, protocol, byref, fmode, recurse, relative, **kwds)#, strictio)
     return file.getvalue()
 
 def load(file, ignore=None, **kwds):
@@ -362,6 +367,7 @@ class Pickler(StockPickler):
        #_strictio = kwds.pop('strictio', None)
         _fmode = kwds.pop('fmode', None)
         _recurse = kwds.pop('recurse', None)
+        _relative = kwds.pop('relative', None)
         StockPickler.__init__(self, file, *args, **kwds)
         self._main = _main_module
         self._diff_cache = {}
@@ -369,6 +375,7 @@ class Pickler(StockPickler):
         self._strictio = False #_strictio
         self._fmode = settings['fmode'] if _fmode is None else _fmode
         self._recurse = settings['recurse'] if _recurse is None else _recurse
+        self._relative = settings['relative'] if _relative is None else _relative
         self._postproc = OrderedDict()
         self._file = file
 
@@ -1141,6 +1148,21 @@ def _save_with_postproc(pickler, reduction, is_pickler_dill=None, obj=Getattr.NO
 #    logger.trace(pickler, "# Co")
 #    return
 
+def get_relative_path(filename):
+    """
+    Returns the path of filename relative to the first directory in sys.path
+    containing filename.
+
+    Returns the unchanged filename if it is not in any sys.path directory.
+    """
+    for dir_path in sys.path:
+        # The path for /aaa/bbb/c.py is relative to /aaa/bbb and not /aaa/bb.
+        if not dir_path.endswith(os.path.sep):
+          dir_path += os.path.sep
+        if filename.startswith(dir_path):
+            return os.path.relpath(filename, dir_path)
+    return filename
+
 # The following function is based on 'save_codeobject' from 'cloudpickle'
 # Copyright (c) 2012, Regents of the University of California.
 # Copyright (c) 2009 `PiCloud, Inc. <http://www.picloud.com>`_.
@@ -1148,13 +1170,16 @@ def _save_with_postproc(pickler, reduction, is_pickler_dill=None, obj=Getattr.NO
 @register(CodeType)
 def save_code(pickler, obj):
     logger.trace(pickler, "Co: %s", obj)
+    co_filename = (get_relative_path(obj.co_filename)
+                   if getattr(pickler, '_relative', False)
+                   else obj.co_filename)
     if hasattr(obj, "co_endlinetable"): # python 3.11a (20 args)
         args = (
             obj.co_lnotab, # for < python 3.10 [not counted in args]
             obj.co_argcount, obj.co_posonlyargcount,
             obj.co_kwonlyargcount, obj.co_nlocals, obj.co_stacksize,
             obj.co_flags, obj.co_code, obj.co_consts, obj.co_names,
-            obj.co_varnames, obj.co_filename, obj.co_name, obj.co_qualname,
+            obj.co_varnames, co_filename, obj.co_name, obj.co_qualname,
             obj.co_firstlineno, obj.co_linetable, obj.co_endlinetable,
             obj.co_columntable, obj.co_exceptiontable, obj.co_freevars,
             obj.co_cellvars
@@ -1168,7 +1193,7 @@ def save_code(pickler, obj):
                 obj.co_argcount, obj.co_posonlyargcount,
                 obj.co_kwonlyargcount, obj.co_nlocals, obj.co_stacksize,
                 obj.co_flags, obj.co_code, obj.co_consts, obj.co_names,
-                obj.co_varnames, obj.co_filename, obj.co_name, obj.co_qualname,
+                obj.co_varnames, co_filename, obj.co_name, obj.co_qualname,
                 obj.co_firstlineno, obj.co_linetable, obj.co_exceptiontable,
                 obj.co_freevars, obj.co_cellvars
             )
@@ -1178,7 +1203,7 @@ def save_code(pickler, obj):
             obj.co_argcount, obj.co_posonlyargcount,
             obj.co_kwonlyargcount, obj.co_nlocals, obj.co_stacksize,
             obj.co_flags, obj.co_code, obj.co_consts, obj.co_names,
-            obj.co_varnames, obj.co_filename, obj.co_name,
+            obj.co_varnames, co_filename, obj.co_name,
             obj.co_firstlineno, obj.co_linetable, obj.co_freevars,
             obj.co_cellvars
         )
@@ -1187,7 +1212,7 @@ def save_code(pickler, obj):
             obj.co_argcount, obj.co_posonlyargcount,
             obj.co_kwonlyargcount, obj.co_nlocals, obj.co_stacksize,
             obj.co_flags, obj.co_code, obj.co_consts, obj.co_names,
-            obj.co_varnames, obj.co_filename, obj.co_name,
+            obj.co_varnames, co_filename, obj.co_name,
             obj.co_firstlineno, obj.co_lnotab, obj.co_freevars,
             obj.co_cellvars
         )
@@ -1195,7 +1220,7 @@ def save_code(pickler, obj):
         args = (
             obj.co_argcount, obj.co_kwonlyargcount, obj.co_nlocals,
             obj.co_stacksize, obj.co_flags, obj.co_code, obj.co_consts,
-            obj.co_names, obj.co_varnames, obj.co_filename,
+            obj.co_names, obj.co_varnames, co_filename,
             obj.co_name, obj.co_firstlineno, obj.co_lnotab,
             obj.co_freevars, obj.co_cellvars
         )
